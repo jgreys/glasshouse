@@ -26,6 +26,7 @@
  */
 var fs = require('fs');
 var path = require('path');
+var execFile = require('child_process').execFile;
 var msg = require('./say').msg;
 var names = require('./names');
 var writeJsonAtomic = require('./util').writeJsonAtomic;
@@ -101,6 +102,20 @@ var BEAT_GRACE_MS = 10000;
 var FIRST_BEAT_GRACE_MS = 20000;
 // Holding Home this long opens LG's Home.
 var HOLD_MS = 1200;
+/*
+ * A short Home press has the view in front within 0.1 s (a G3, webOS 9.2.2; a
+ * G5, webOS 10.3.1). Not there this long after, the press opened nothing.
+ */
+var OPEN_GRACE_MS = 3000;
+/*
+ * WebAppMgr runs every web app, the view among them. On a G4 (webOS 11.2.0) it
+ * was stopped by a SIGTERM from outside, and its unit restarts only on a
+ * failure, so it stayed down: each Home press had sam launch the view and
+ * nothing drew it.
+ */
+var WAM_EXE = 'WebAppMgr';
+var WAM_UNIT = 'webapp-mgr.service';
+var SYSTEMCTLS = ['/bin/systemctl', '/usr/bin/systemctl'];
 var GUIDE_TTL_MS = 60000;
 var LIST_TTL_MS = 30000;
 
@@ -111,6 +126,9 @@ var stateDir = '/var/lib/tvweb';
 var webosVersion = null;
 var serverPort = 8080;
 var installFn = null;
+var procDir = '/proc';
+var execFn = execFile;
+var systemctlPath = '';
 // Starts and stops reading the remote's Home button (lib/remotebuttons).
 /** @type {function(boolean): void} */
 var homeKeysFn = function () {};
@@ -149,6 +167,8 @@ var beatTimer = null;
 var lastBeatAt = 0;
 var holdTimer = null;
 var homeDownAt = 0;
+// After a short Home press, the check that the view came to the front.
+var openTimer = null;
 var powerActive = true;
 // tvpower's raw state, null until the first reading.
 var powerState = null;
@@ -1290,6 +1310,8 @@ function homeKey(down) {
     if (shortPress && escaped && foreground === LG_HOME) {
       escaped = false;
       switchTo(true, function () {});
+    } else if (shortPress && !escaped && takeover.mounted()) {
+      watchOpen(false);
     }
     return;
   }
@@ -1299,6 +1321,50 @@ function homeKey(down) {
     holdTimer = null;
     toLgHome('Home held');
   }, HOLD_MS);
+}
+
+/*
+ * After a short Home press, the view should be in front. Where it is not and
+ * WebAppMgr is not running, WebAppMgr is started and the view opened once
+ * more; failing that, LG's Home, which does not need WebAppMgr, has its place.
+ */
+function watchOpen(retried) {
+  stopOpenWatch();
+  openTimer = setTimeout(function () {
+    openTimer = null;
+    if (foreground === LG_HOME || escaped || !powerActive || !readConfig().enabled) return;
+    if (retried || webAppMgrRunning() !== false) return toLgHome('Glasshouse Home did not open');
+    console.error('home: Glasshouse Home did not open: WebAppMgr is not running; starting it');
+    startWebAppMgr(function (ok) {
+      if (!ok) return toLgHome('WebAppMgr would not start');
+      launch(LG_HOME, null, function () { watchOpen(true); });
+    });
+  }, OPEN_GRACE_MS);
+}
+
+function stopOpenWatch() {
+  if (openTimer) clearTimeout(openTimer);
+  openTimer = null;
+}
+
+// true or false, or null where the process list could not be read.
+function webAppMgrRunning() {
+  var pids;
+  try { pids = fs.readdirSync(procDir); } catch (e) { return null; }
+  return pids.some(function (d) {
+    if (!/^\d+$/.test(d)) return false;
+    try {
+      var argv0 = fs.readFileSync(path.join(procDir, d, 'cmdline'), 'utf8').split('\0')[0];
+      return path.basename(argv0) === WAM_EXE;
+    } catch (e) { return false; }
+  });
+}
+
+function startWebAppMgr(cb) {
+  if (!systemctlPath) return cb(false);
+  execFn(systemctlPath, ['start', WAM_UNIT], { timeout: 10000 }, function (err) {
+    cb(!err && webAppMgrRunning() === true);
+  });
 }
 
 function cancelWake() {
@@ -1408,6 +1474,10 @@ function init(opts) {
   webosVersion = opts.webosVersion || null;
   serverPort = opts.port === undefined ? 8080 : Number(opts.port);
   installFn = opts.installApp || null;
+  procDir = opts.procDir || '/proc';
+  execFn = opts.exec || execFile;
+  systemctlPath = opts.systemctl !== undefined ? opts.systemctl
+    : SYSTEMCTLS.filter(function (p) { return fs.existsSync(p); })[0] || '';
   allowExperimentalFn = opts.allowExperimental || function () { return false; };
   homeKeysFn = opts.homeKeys || function () {};
   pictureDetailsFn = opts.pictureDetails || function () {};
@@ -1506,6 +1576,7 @@ function start() {
 function stop() {
   cancelWake();
   stopBeatWatch();
+  stopOpenWatch();
   if (holdTimer) clearTimeout(holdTimer);
   holdTimer = null;
   homeKeysFn(false);

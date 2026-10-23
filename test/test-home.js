@@ -7,7 +7,8 @@
  * LG's Home auto launch is off while it is on, and put back after;
  * LG's notifications and search are on the Apps row; the ways back to LG's Home give its
  * place back until something else is in front; what earlier builds changed is undone once; and a view
- * that sends no heartbeat is replaced by LG's Home
+ * that sends no heartbeat is replaced by LG's Home, as is one a Home press
+ * does not bring to the front once WebAppMgr has been started again
  *
  * The mount is a symlink here: lib/home-takeover tells a mounted directory by
  * its inode, which a symlink shares. sam is a reader of whatever appinfo.json
@@ -66,6 +67,18 @@ function lgRunning(on) {
   }
 }
 
+// WebAppMgr, which runs the view: started by systemctl unless the TV refuses.
+var WAM_PID = 4540;
+function wamRunning(on) {
+  var p = path.join(procDir, String(WAM_PID));
+  if (on) {
+    if (!fs.existsSync(p)) fs.mkdirSync(p);
+    fs.writeFileSync(path.join(p, 'cmdline'), '/usr/bin/WebAppMgr\0--webos-js-flags=');
+  } else {
+    rmrf(p);
+  }
+}
+
 function freshTv() {
   rmrf(dir);
   fs.mkdirSync(dir);
@@ -114,6 +127,9 @@ function exec(file, args, opts, cb) {
       fs.unlinkSync(appDir);
       fs.symlinkSync(args[1], appDir);
     }
+  } else if (file === '/bin/systemctl') {
+    tv.events.push('systemctl ' + args.join(' '));
+    if (!tv.wamStartFails) wamRunning(true);
   } else if (file === '/bin/umount') {
     tv.events.push('umount');
     fs.unlinkSync(appDir);
@@ -914,6 +930,74 @@ step('held, Home opens LG\'s Home; a short press there brings Glasshouse Home ba
           home.disable(function () { done(); });
         });
       });
+    });
+  });
+});
+
+// A G4 (webOS 11.2.0) with WebAppMgr stopped: sam launched the view on every press and nothing drew it.
+step('a short Home press that opens nothing starts WebAppMgr and opens the view again', function (done) {
+  start({ enabled: true }, { systemctl: '/bin/systemctl' });
+  home.start();
+  wait(50, function () {
+    foreground('com.webos.app.hdmi1');
+    tv.launched = [];
+    home.homeKey(true);
+    home.homeKey(false);
+    wait(3100, function () {
+      assert.ok(tv.events.indexOf('systemctl start webapp-mgr.service') !== -1, 'WebAppMgr started');
+      assert.deepEqual(tv.launched, [LG_HOME], 'and the view opened again');
+      foreground(LG_HOME);
+      wait(3100, function () {
+        assert.ok(taken(), 'in front, Glasshouse Home keeps LG\'s Home\'s place');
+        home.disable(function () { done(); });
+      });
+    });
+  });
+});
+
+step('with WebAppMgr running, a short Home press that opens nothing gives LG\'s Home its place', function (done) {
+  start({ enabled: true }, { systemctl: '/bin/systemctl' });
+  wamRunning(true);
+  home.start();
+  wait(50, function () {
+    foreground('com.webos.app.hdmi1');
+    home.homeKey(true);
+    home.homeKey(false);
+    wait(3100, function () {
+      assert.strictEqual(tv.samType, 'native', 'LG\'s Home has its place');
+      assert.ok(tv.events.indexOf('systemctl start webapp-mgr.service') === -1, 'WebAppMgr left alone');
+      home.disable(function () { done(); });
+    });
+  });
+});
+
+step('where WebAppMgr will not start, a short Home press that opens nothing gives LG\'s Home its place', function (done) {
+  start({ enabled: true }, { systemctl: '/bin/systemctl' });
+  tv.wamStartFails = true;
+  home.start();
+  wait(50, function () {
+    foreground('com.webos.app.hdmi1');
+    home.homeKey(true);
+    home.homeKey(false);
+    wait(3100, function () {
+      assert.ok(tv.events.indexOf('systemctl start webapp-mgr.service') !== -1);
+      assert.strictEqual(tv.samType, 'native', 'LG\'s Home has its place');
+      home.disable(function () { done(); });
+    });
+  });
+});
+
+step('a short Home press with the view in front changes nothing', function (done) {
+  start({ enabled: true }, { systemctl: '/bin/systemctl' });
+  home.start();
+  wait(50, function () {
+    foreground(LG_HOME);
+    home.homeKey(true);
+    home.homeKey(false);
+    wait(3100, function () {
+      assert.ok(taken());
+      assert.ok(tv.events.indexOf('systemctl start webapp-mgr.service') === -1);
+      home.disable(function () { done(); });
     });
   });
 });
