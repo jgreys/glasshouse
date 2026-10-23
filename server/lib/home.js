@@ -104,9 +104,10 @@ var FIRST_BEAT_GRACE_MS = 20000;
 var HOLD_MS = 1200;
 /*
  * A short Home press has the view in front within 0.1 s (a G3, webOS 9.2.2; a
- * G5, webOS 10.3.1). Not there this long after, the press opened nothing.
+ * G5, webOS 10.3.1), and it beats as it shows. No beat this long after, the
+ * press opened nothing.
  */
-var OPEN_GRACE_MS = 3000;
+var OPEN_GRACE_MS = 5000;
 /*
  * WebAppMgr runs every web app, the view among them. On a G4 (webOS 11.2.0) it
  * was stopped by a SIGTERM from outside, and its unit restarts only on a
@@ -165,10 +166,14 @@ var foreground = '';
 var lastSource = null;
 var beatTimer = null;
 var lastBeatAt = 0;
+// Heartbeats since the server started, so one after a press can be told apart.
+var beats = 0;
 var holdTimer = null;
 var homeDownAt = 0;
 // After a short Home press, the check that the view came to the front.
 var openTimer = null;
+// WebAppMgr being started again for a view that did not draw.
+var recovering = false;
 var powerActive = true;
 // tvpower's raw state, null until the first reading.
 var powerState = null;
@@ -1258,12 +1263,13 @@ function watchBeat(ms) {
     // Switched off into standby the view stops beating; nothing is on screen to replace.
     if (!viewInFront() || !powerActive) return;
     console.error('home: the Glasshouse Home view is not answering');
-    toLgHome('view not answering');
+    recoverView('view not answering', false);
   }, ms);
 }
 
 function beat() {
   lastBeatAt = nowMs();
+  beats++;
   if (viewInFront()) watchBeat(BEAT_GRACE_MS);
   return { ok: true, enabled: readConfig().enabled, build: buildId, wallpapers: wallpapers.status(),
            layoutVersion: layoutVersion() };
@@ -1311,7 +1317,7 @@ function homeKey(down) {
       escaped = false;
       switchTo(true, function () {});
     } else if (shortPress && !escaped && takeover.mounted()) {
-      watchOpen(false);
+      watchOpen(false, OPEN_GRACE_MS);
     }
     return;
   }
@@ -1324,22 +1330,43 @@ function homeKey(down) {
 }
 
 /*
- * After a short Home press, the view should be in front. Where it is not and
- * WebAppMgr is not running, WebAppMgr is started and the view opened once
- * more; failing that, LG's Home, which does not need WebAppMgr, has its place.
+ * After a short Home press the view beats at once, opened or relaunched. sam
+ * is no witness: with WebAppMgr stopped it kept naming the view in front
+ * though nothing was drawn (a G4, webOS 11.2.0).
  */
-function watchOpen(retried) {
+function watchOpen(retried, ms) {
   stopOpenWatch();
+  var beatsBefore = beats;
   openTimer = setTimeout(function () {
     openTimer = null;
-    if (foreground === LG_HOME || escaped || !powerActive || !readConfig().enabled) return;
-    if (retried || webAppMgrRunning() !== false) return toLgHome('Glasshouse Home did not open');
-    console.error('home: Glasshouse Home did not open: WebAppMgr is not running; starting it');
-    startWebAppMgr(function (ok) {
-      if (!ok) return toLgHome('WebAppMgr would not start');
-      launch(LG_HOME, null, function () { watchOpen(true); });
+    if (beats > beatsBefore || escaped || !powerActive || !readConfig().enabled) return;
+    recoverView('Glasshouse Home did not open', retried);
+  }, ms);
+}
+
+/*
+ * A view that did not open or stopped beating. With WebAppMgr not running,
+ * neither the view nor LG's Home drew (a G4, webOS 11.2.0), so WebAppMgr is
+ * started and the view opened once more; otherwise, or after that, LG's Home
+ * has the place.
+ */
+function recoverView(why, retried) {
+  if (recovering) return;
+  if (retried || webAppMgrRunning() !== false) return toLgHome(why);
+  recovering = true;
+  console.error('home: ' + why + ': WebAppMgr is not running; starting it');
+  startWebAppMgr(function (ok) {
+    if (!ok) {
+      recovering = false;
+      return toLgHome('WebAppMgr would not start');
+    }
+    launch(LG_HOME, null, function () {
+      recovering = false;
+      // The page loads from cold, so its first beat is given the longer wait.
+      stopBeatWatch();
+      watchOpen(true, FIRST_BEAT_GRACE_MS);
     });
-  }, OPEN_GRACE_MS);
+  });
 }
 
 function stopOpenWatch() {
@@ -1495,6 +1522,8 @@ function init(opts) {
   powerActive = true;
   powerState = null;
   lastBeatAt = 0;
+  beats = 0;
+  recovering = false;
   guideCache = { at: 0, data: {} };
   listCache = {};
   changing = false;

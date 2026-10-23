@@ -7,8 +7,8 @@
  * LG's Home auto launch is off while it is on, and put back after;
  * LG's notifications and search are on the Apps row; the ways back to LG's Home give its
  * place back until something else is in front; what earlier builds changed is undone once; and a view
- * that sends no heartbeat is replaced by LG's Home, as is one a Home press
- * does not bring to the front once WebAppMgr has been started again
+ * that sends no heartbeat, or none after a Home press, gets WebAppMgr started
+ * again where it is not running, and is otherwise replaced by LG's Home
  *
  * The mount is a symlink here: lib/home-takeover tells a mounted directory by
  * its inode, which a symlink shares. sam is a reader of whatever appinfo.json
@@ -94,6 +94,7 @@ function freshTv() {
   tv = { settings: copy(ORIGINAL), events: [], launched: [], samType: 'native', samCategory: null, samRefuses: false,
          oldAppInstalled: false, mountFails: false };
   lgRunning(true);
+  wamRunning(true);
 }
 
 // sam reads LG's Home's directory when told to, as it does on a scan.
@@ -934,36 +935,56 @@ step('held, Home opens LG\'s Home; a short press there brings Glasshouse Home ba
   });
 });
 
-// A G4 (webOS 11.2.0) with WebAppMgr stopped: sam launched the view on every press and nothing drew it.
-step('a short Home press that opens nothing starts WebAppMgr and opens the view again', function (done) {
+// A G4 (webOS 11.2.0) with WebAppMgr stopped under the view: sam kept naming the view in
+// front, launched it on every press, and nothing drew it, nor LG's Home.
+step('a short Home press that brings no heartbeat starts WebAppMgr and opens the view again', function (done) {
   start({ enabled: true }, { systemctl: '/bin/systemctl' });
+  wamRunning(false);
   home.start();
   wait(50, function () {
-    foreground('com.webos.app.hdmi1');
+    foreground(LG_HOME);
+    home.beat();
     tv.launched = [];
     home.homeKey(true);
     home.homeKey(false);
-    wait(3100, function () {
+    wait(5100, function () {
       assert.ok(tv.events.indexOf('systemctl start webapp-mgr.service') !== -1, 'WebAppMgr started');
       assert.deepEqual(tv.launched, [LG_HOME], 'and the view opened again');
-      foreground(LG_HOME);
-      wait(3100, function () {
-        assert.ok(taken(), 'in front, Glasshouse Home keeps LG\'s Home\'s place');
+      home.beat();
+      wait(5100, function () {
+        assert.ok(taken(), 'beating again, Glasshouse Home keeps LG\'s Home\'s place');
+        assert.strictEqual(tv.events.filter(function (e) { return e === 'systemctl start webapp-mgr.service'; }).length, 1);
         home.disable(function () { done(); });
       });
     });
   });
 });
 
-step('with WebAppMgr running, a short Home press that opens nothing gives LG\'s Home its place', function (done) {
+step('a view that stops beating with WebAppMgr stopped gets WebAppMgr started, not LG\'s Home', function (done) {
   start({ enabled: true }, { systemctl: '/bin/systemctl' });
-  wamRunning(true);
+  wamRunning(false);
+  home.start();
+  wait(50, function () {
+    foreground(LG_HOME);
+    home.beat();
+    tv.launched = [];
+    wait(10100, function () {
+      assert.ok(tv.events.indexOf('systemctl start webapp-mgr.service') !== -1, 'WebAppMgr started');
+      assert.deepEqual(tv.launched, [LG_HOME], 'and the view opened again');
+      assert.ok(taken(), 'Glasshouse Home keeps the place');
+      home.disable(function () { done(); });
+    });
+  });
+});
+
+step('with WebAppMgr running, a short Home press that brings no heartbeat gives LG\'s Home its place', function (done) {
+  start({ enabled: true }, { systemctl: '/bin/systemctl' });
   home.start();
   wait(50, function () {
     foreground('com.webos.app.hdmi1');
     home.homeKey(true);
     home.homeKey(false);
-    wait(3100, function () {
+    wait(5100, function () {
       assert.strictEqual(tv.samType, 'native', 'LG\'s Home has its place');
       assert.ok(tv.events.indexOf('systemctl start webapp-mgr.service') === -1, 'WebAppMgr left alone');
       home.disable(function () { done(); });
@@ -971,15 +992,16 @@ step('with WebAppMgr running, a short Home press that opens nothing gives LG\'s 
   });
 });
 
-step('where WebAppMgr will not start, a short Home press that opens nothing gives LG\'s Home its place', function (done) {
+step('where WebAppMgr will not start, a short Home press that brings no heartbeat gives LG\'s Home its place', function (done) {
   start({ enabled: true }, { systemctl: '/bin/systemctl' });
   tv.wamStartFails = true;
+  wamRunning(false);
   home.start();
   wait(50, function () {
     foreground('com.webos.app.hdmi1');
     home.homeKey(true);
     home.homeKey(false);
-    wait(3100, function () {
+    wait(5100, function () {
       assert.ok(tv.events.indexOf('systemctl start webapp-mgr.service') !== -1);
       assert.strictEqual(tv.samType, 'native', 'LG\'s Home has its place');
       home.disable(function () { done(); });
@@ -987,14 +1009,16 @@ step('where WebAppMgr will not start, a short Home press that opens nothing give
   });
 });
 
-step('a short Home press with the view in front changes nothing', function (done) {
+step('a short Home press the view answers with a heartbeat changes nothing', function (done) {
   start({ enabled: true }, { systemctl: '/bin/systemctl' });
   home.start();
   wait(50, function () {
-    foreground(LG_HOME);
+    foreground('com.webos.app.hdmi1');
     home.homeKey(true);
     home.homeKey(false);
-    wait(3100, function () {
+    foreground(LG_HOME);
+    home.beat();
+    wait(5100, function () {
       assert.ok(taken());
       assert.ok(tv.events.indexOf('systemctl start webapp-mgr.service') === -1);
       home.disable(function () { done(); });

@@ -46,7 +46,9 @@ Four ways lead back to LG's Home without switching anything off:
 * the **LG Home** tile;
 * holding the remote's **Home** button for a second or more; a short press on LG's Home then brings Glasshouse Home back;
 * Glasshouse Home not answering: if the view stops sending its heartbeat for ten seconds, LG's Home opens instead;
-* Glasshouse Home not opening: if a short press of **Home** has not brought it to the front within three seconds, LG's Home opens instead. Where that is because the TV's web app manager, which runs Glasshouse Home, has stopped, it is started again first and Glasshouse Home given one more try.
+* Glasshouse Home not opening: if a short press of **Home** brings no heartbeat from the view within five seconds, LG's Home opens instead.
+
+In the last two cases, where the TV's web app manager, which runs Glasshouse Home, has stopped, it is started again first and Glasshouse Home given one more try: with it stopped, LG's Home does not open either.
 
 LG's Home opens about two seconds after any of them, and Glasshouse Home takes its place again as soon as something else is opened.
 

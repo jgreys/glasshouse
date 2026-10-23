@@ -1028,6 +1028,10 @@ Seen on 23 October 2026 on an OLED65G4KNA with Glasshouse Home switched on.
   40 minutes. LG's own Flutter Home, put back in its place, did not show
   either: launched by the server and then by a Home press 21 s later, it got
   no window.
+- **sam goes on naming the dead view in front.** With WebAppMgr stopped while
+  the view was in front (under the screen saver), Glasshouse's foreground
+  stayed `com.webos.app.home` through later presses, so only the view's
+  heartbeat tells whether a press opened it.
 - **`systemctl start webapp-mgr.service` brings it back** without a restart.
 - **The remote's Home reaches `/dev/input` on this TV.** Unlike the C5's
   MR25GA (above), Glasshouse's reader saw Home go down on the MR24N and
